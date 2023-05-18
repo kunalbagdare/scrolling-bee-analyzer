@@ -2,7 +2,7 @@ import json
 import os
 import click
 import pandas as pd
-from utils import custom_logger, openai_request, time_calculator, mongo_connection
+from pipelines.utils import custom_logger, openai_request, time_calculator, mongo_connection
 
 logger = custom_logger()
 
