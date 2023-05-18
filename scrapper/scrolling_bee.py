@@ -1,16 +1,19 @@
-import requests
-from scrapy import Selector
-import traceback
-import json
 import html
-from bs4 import BeautifulSoup
+import json
+import sys
 import time
-from utils import custom_logger
-from utils import generate_selector,create_csv
+import traceback
+from datetime import datetime
+
+import click
+import requests
+from bs4 import BeautifulSoup
+from scrapy import Selector
+
+sys.path.append('..')
+from utils import create_csv, custom_logger, generate_selector,time_calculator
 
 logger = custom_logger()
-
-product_list = []
 
 
 def calculate_stars(stars):
@@ -49,6 +52,7 @@ def review_extractor(product_id,last_page):
 
 	current_page = 1
 	all_reviews = []
+	review_dates = []
 
 	while current_page <= last_page:
 
@@ -59,7 +63,6 @@ def review_extractor(product_id,last_page):
 		raw_html = html.unescape(raw_data['html'])
 		clean_html = str(BeautifulSoup(raw_html, 'html.parser'))
 		review_sel = Selector(text=clean_html)
-		
 
 		reviews = review_sel.xpath('//div[@class="jdgm-rev-widg__reviews"]/div').extract()
 		
@@ -77,10 +80,17 @@ def review_extractor(product_id,last_page):
 				all_reviews.append(body)
 			else:
 				all_reviews.append(title+' | '+body)
+			
+			try:
+				raw_date = rev.xpath('//span[@class="jdgm-rev__timestamp jdgm-spinner"]/@data-content').extract()[0]
+				date = datetime.strptime(raw_date, '%Y-%m-%d %H:%M:%S %Z').date().strftime('%Y-%m-%d')
+				review_dates.append(date)
+			except IndexError as e:
+				logger.error('Unable to get date: %s', e)
 
 		current_page += 1
 
-	return all_reviews
+	return all_reviews,review_dates
 	
 def pv_main(product_url):
 	"""
@@ -100,20 +110,22 @@ def pv_main(product_url):
 	raw_json_data = pv_sel.xpath('//script[@id="ProductJson-nov-product-template"]/text()').extract()[0]
 	json_data = json.loads(raw_json_data)
 	product_id = json_data['id']
-	all_reviews = review_extractor(product_id,last_page)
+	all_reviews,review_dates = review_extractor(product_id,last_page)
 
 	logger.info(f'Total reviews found: {str(len(all_reviews))}')
-	return all_reviews
+	return all_reviews,review_dates
 
 
-
-def lv_main():
+@click.command()
+@click.option("--filename", default='data', help="Name of the csv file")
+@time_calculator
+def lv_main(filename):
 	"""
 	The function lv_main() scrapes product information and reviews from a website and saves it to a CSV
 	file.
 	"""
 
-	global product_list
+	product_list = []
 
 	try:
 		url = 'https://www.scrollingbee.com/collections/raw-honey'
@@ -137,11 +149,11 @@ def lv_main():
 			product_url = "https://www.scrollingbee.com"+art_sel.xpath('//div[@class="product__title"]//a/@href').extract()[0]
 			stars = art_sel.xpath('//div[@class="jdgm-prev-badge"]/span[@class="jdgm-prev-badge__stars"]/span').extract()
 			count_stars = calculate_stars(stars)
-			count_reviews = art_sel.xpath('//div[@class="jdgm-prev-badge"]//span[@class="jdgm-prev-badge__text"]//text()').extract()[0].strip().replace('reviews','').strip()
+			count_reviews = art_sel.xpath('//div[@class="jdgm-prev-badge"]//span[@class="jdgm-prev-badge__text"]//text()').extract()[0].strip().replace('reviews','').replace('review','').strip()
 			product_price = art_sel.xpath('//div[@class="product__price"]//span[@class="product-price__price"]//text()').extract()[0].strip().replace('Rs. ','').replace(',','')
 
 			logger.info(f'Fetching Reviews for {product_name}')
-			all_reviews = pv_main(product_url)
+			all_reviews,review_dates = pv_main(product_url)
 
 			item['NAME'] = product_name
 			item['IMAGE'] = product_img
@@ -150,21 +162,21 @@ def lv_main():
 			item['RATING'] = count_stars
 			item['NO_OF_REVIEWS'] = count_reviews
 			item['REVIEWS'] = all_reviews
+			item['DATES'] = review_dates
 			
 			product_list.append(item)
 
 		logger.info(f"Fetched {len(product_list)} Items Successfully")
 		logger.info('Proccessing CSV ...')
-		create_csv(product_list)
+		create_csv(product_list,filename)
 		logger.info('CSV File generated successfully')
+		
 
 	except IndexError as e:
 		traceback_str = ''.join(traceback.format_tb(e.__traceback__))
 		logger.error(f'Issue with product {i}:',traceback_str)
     
 if __name__ == '__main__':
-	start_time = time.time()
 	lv_main()
-	end_time = time.time()
-	logger.info(f'Total run time: {str(end_time - start_time)}')
+	
         
